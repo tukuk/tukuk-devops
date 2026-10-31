@@ -4,8 +4,9 @@
 Why this exists as a *public* Action: it costs nothing to run here, needs no credentials, and is the
 only thing that would tell us the bank went stale or corrupt before a visitor on /alat/dictionary
 notices a regression. It reads the public releases exactly the way scripts/wordbank-sync.sh does —
-which since the Malay pipeline means BOTH rolling tags: wordbank-latest (English, WordNet) and
-malaybank-latest (Malay + Indonesian, wiktextract).
+which since the Malay pipeline means THREE rolling tags: wordbank-latest (English, WordNet),
+malaybank-latest (Malay + Indonesian, wiktextract) and wikibank-latest (Wikipedia summary
+snapshots, which GROWS a few tens of thousands of titles per daily run instead of rebuilding).
 
 Checks, all against the real download paths the server uses, per release:
   1. manifest.json parses, rows_total > 0 and the languages that release owns are present.
@@ -26,11 +27,13 @@ import urllib.request
 
 ORIGIN = "https://github.com/tukuk/tukuk-devops/releases/download"
 
-# tag -> languages that release must always contain. A release that stops producing a language it
+# tag -> languages that release must always contain (empty = a bank with no language dimension,
+# checked by row count + age + checksums only). A release that stops producing a language it
 # owns is a silent data loss: the box would just load fewer files and nobody would notice.
 RELEASES = {
     "wordbank-latest": ["en"],
     "malaybank-latest": ["ms", "id"],
+    "wikibank-latest": [],
 }
 
 
@@ -56,7 +59,7 @@ def verify_release(tag, required_langs, max_age_days, errors):
     manifest = json.loads(fetch("%s/manifest.json" % base))
     rows = manifest.get("rows_total", 0)
     files = manifest.get("files", [])
-    langs = {f.get("lang") for f in files}
+    langs = {f.get("lang") for f in files if f.get("lang")}
     if rows <= 0:
         err("%s: rows_total is %s (bank is empty)" % (tag, rows), errors)
     missing = [l for l in required_langs if l not in langs]

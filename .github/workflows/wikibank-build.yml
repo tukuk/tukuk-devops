@@ -1,0 +1,94 @@
+name: wikibank-build
+
+# Fills tukuk.org's Wikipedia summary bank ONE BUDGETED SLICE at a time (tools/wikibank_build.py).
+# 640 865 titles cannot be fetched in one run by anyone, and should not be — so every run resumes
+# where the last one stopped: it downloads the previous bank from this very release, fetches only
+# titles still missing for ~3 hours at a polite rate, and republishes the grown bank. Days of
+# daily crons later the bank is complete, and this becomes a maintenance job for changed articles.
+#
+# Same public-repo economics as the other pipelines (unlimited runner minutes; the box only ever
+# downloads a checksummed release asset), and the same politeness rule Wikipedia asks of us: a
+# descriptive User-Agent with a contact, one shared token bucket, backoff on 429/403, and a red
+# exit if an entire run fails — being blocked must be loud, because the live site's fallback IS
+# this same API.
+#
+# Seed note: seeds/wiki-seed.tsv.gz is generated from the PRIVATE app repo by tools/wikibank_seed.py
+# and re-committed whenever the app's data changes. It is a list of Wikipedia titles — public
+# information by construction; nothing about tukuk-os leaks by publishing it.
+
+on:
+  schedule:
+    # Daily 06:07 UTC. Dodges wordbank-build (Mon 04:17), malaybank-build (Mon 04:47),
+    # wordbank-monitor (daily 05:20) and the box's :00/:15 timers, and finishes (~3.5 h) well
+    # before the next evening's activity peak.
+    - cron: '7 6 * * *'
+  workflow_dispatch: {}
+  push:
+    paths:
+      - 'tools/wikibank_build.py'
+      - '.github/workflows/wikibank-build.yml'
+      - 'seeds/wiki-seed.tsv.gz'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wikibank-latest
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # 3 h fetch budget + resume download + up to ~150 MB republish + slack. Under GitHub's 6 h
+    # job cap on purpose: a run killed at the cap mid-publish would still leave last week's
+    # assets intact, but a run that ENDS on its own always publishes a complete bank.
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # stdlib only (urllib + gzip): every pip package here is another outage between us and the
+      # bank growing.
+
+      - name: resume previous bank
+        run: |
+          set -uo pipefail
+          # First run in history has no release yet — that is not an error, so `|| true` belongs on
+          # THIS download only (unlike build steps, where swallowing failure hides broken data).
+          curl -fsSL --retry 3 -o wikibank-prev.jsonl.gz \
+            "https://github.com/tukuk/tukuk-devops/releases/download/wikibank-latest/wikibank.jsonl.gz" \
+            || echo "no previous bank (first build) — starting from zero"
+
+      - name: build (budgeted slice)
+        run: python tools/wikibank_build.py --seed seeds/wiki-seed.tsv.gz --prev wikibank-prev.jsonl.gz --out dist --budget-s 10800 --rps 3 --workers 6
+
+      - name: summary
+        run: |
+          # Single-line jq with the file arg on the SAME line (the exit-126 lesson).
+          {
+            echo "## Wikipedia bank build"
+            jq -r '"**\(.rows_total) rows banked, \(.pending_remaining) still pending**"' dist/manifest.json
+            jq -r '.this_run | "- this run: +\(.fetched_ok) ok, \(.gone_404) 404, \(.failed) failed in \(.elapsed_s)s at \(.rps) rps"' dist/manifest.json
+            echo
+            echo '```'
+            cat dist/SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: publish on the rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view wikibank-latest >/dev/null 2>&1 || gh release create wikibank-latest --title "Wikipedia summary bank (rolling, growing)" --notes "Snapshots of en.wikipedia.org page summaries that tukuk.org pages otherwise fetch live. Built incrementally by wikibank-build.yml; CC BY-SA 4.0 — keep manifest.json beside the data. Production pulls these assets by SHA256. Do not delete."
+          gh release upload wikibank-latest dist/* --clobber
+          for name in $(gh release view wikibank-latest --json assets -q '.assets[].name'); do
+            if [ ! -e "dist/$name" ]; then
+              echo "pruning stale release asset: $name"
+              gh release delete-asset wikibank-latest "$name" --yes
+            fi
+          done
+          echo "published: $(gh release view wikibank-latest --json assets -q '.assets[].name' | tr '\n' ' ')"
