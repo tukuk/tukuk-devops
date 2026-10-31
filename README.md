@@ -14,6 +14,7 @@ The application source itself is **not** here. It lives in the private `tukuk/tu
 | Pipeline | Trigger | Output |
 |---|---|---|
 | [`wordbank-build`](.github/workflows/wordbank-build.yml) | Mondays 04:17 UTC, on push to `tools/`, or by hand | A dictionary data bank built from Princeton WordNet + wordfreq, published on the rolling release tag [`wordbank-latest`](https://github.com/tukuk/tukuk-devops/releases/tag/wordbank-latest) |
+| [`wordbank-monitor`](.github/workflows/wordbank-monitor.yml) | Daily 05:20 UTC, or by hand | Reads the `wordbank-latest` release the way the server does and fails red if it is empty, stale, or checksum-mismatched. Read-only, no credentials, no server access — the red run *is* the alert |
 
 ### The word bank
 
