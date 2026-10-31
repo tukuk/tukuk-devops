@@ -1,0 +1,37 @@
+name: wordbank-monitor
+
+# Off-box health check for the exact release the production server downloads (see
+# wordbank-build.yml and tukuk-os/scripts/wordbank-sync.sh). This never writes to the bank; it only
+# reads it the way the box does and fails loudly if the data is empty, stale, or corrupt.
+
+# Why a separate monitor and not just trusting the build: a green build weeks ago still tells you
+# nothing about TODAY. If the Monday cron silently stopped, or a CDN object got truncated, the box
+# would keep serving whatever `kata` last loaded and nobody would know the pipeline stalled. This
+# run going red is the notification — no credential, no server access, nothing to break.
+
+on:
+  schedule:
+    # Daily 05:20 UTC. Dodges the Monday 04:17 UTC build (a monitor firing mid-publish would see a
+    # half-written release) and the box's own :00/:15 timers.
+    - cron: '20 5 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # The exit code is the verdict: tools/wordbank_verify.py prints ::error:: annotations and
+      # returns non-zero on any failed check. No continue-on-error, no `|| true` — a monitor that
+      # swallows its own findings is worse than no monitor.
+      - name: verify integrity + freshness
+        run: python tools/wordbank_verify.py
