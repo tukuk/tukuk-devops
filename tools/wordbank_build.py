@@ -41,6 +41,16 @@ import time
 # others are opportunistic and simply drop out if OMW is not installed.
 LANGS = ["en", "ms", "id", "fa", "ar", "zh", "fr", "de", "es"]
 
+# The short codes above are what wordfreq wants AND what a consumer's row should say. WordNet does
+# NOT accept them: wn.all_synsets(lang=...) matches against OMW langIds, which are ISO-639-3, so
+# lang="en" returns ZERO synsets while lang="eng" returns 117659. This is the whole reason the first
+# build shipped empty and then correctly refused to publish: the FATAL guard below is the only thing
+# that turned a silent-empty-data bug into a red X. Do not remove it.
+WORDNET_LANGID = {
+    "en": "eng", "ms": "msa", "id": "ind", "fa": "pes", "ar": "arb",
+    "zh": "cmn", "fr": "fra", "de": "deu", "es": "spa",
+}
+
 WS = re.compile(r"\s+")
 
 
@@ -73,17 +83,28 @@ def build_lang(wn, lang, outdir):
     rows, seen, per_word = 0, set(), {}
     path = os.path.join(outdir, "wordbank-%s.jsonl.gz" % lang)
     with gzip.open(path, "wt", encoding="utf-8") as fh:
+        # WordNet speaks ISO-639-3, not the short codes; translate before asking for synsets.
+        langid = WORDNET_LANGID.get(lang, lang)
         try:
-            synsets = list(wn.all_synsets(lang=lang))
+            synsets = list(wn.all_synsets(lang=langid))
         except Exception as exc:
-            print("  %-2s unavailable (%s)" % (lang, exc), file=sys.stderr)
+            print("  %-2s (langId %s) unavailable: %s" % (lang, langid, exc))
+            return None
+        if not synsets:
+            # Zero is the exact failure mode that broke the first build. Say it out loud on stdout
+            # so the Actions log shows WHY a language dropped out instead of a clean, silent absence.
+            print("  %-2s (langId %s): WordNet has no synsets for this langId — OMW not loaded?"
+                  % (lang, langid))
             return None
         for syn in synsets:
             definition = norm(syn.definition())
             if not definition:
                 continue
             try:
-                hyper = [norm(h.node_name().split(".")[0]) for h in syn.hypernyms()]
+                # hypernyms() returns Synset objects; there is no .node_name() on them (that call
+                # silently returned [] under the old except-guard, so the hypernym field was ALWAYS
+                # empty). .name() is 'rain.n.01' -> take the leading lemma.
+                hyper = [norm(h.name().split(".")[0]) for h in syn.hypernyms()]
             except Exception:
                 hyper = []
             for lemma in syn.lemmas():
@@ -156,7 +177,15 @@ def main():
         try:
             nltk.download(corpus, quiet=True)
         except Exception as exc:
-            print("download %s failed: %s" % (corpus, exc), file=sys.stderr)
+            print("download %s failed: %s" % (corpus, exc))
+
+    # State the truth about what this environment actually loaded, before the loop decides what to
+    # build. If OMW failed to register its languages, wn.langs() will show only ['eng'] and the
+    # log will say so — no more guessing why only one file appeared.
+    try:
+        print("nltk %s; WordNet langs loaded: %s" % (nltk.__version__, sorted(wn.langs())))
+    except Exception as exc:
+        print("could not enumerate wn.langs(): %s" % exc)
 
     started = time.time()
     files, totals = [], 0
