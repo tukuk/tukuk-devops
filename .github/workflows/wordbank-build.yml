@@ -81,10 +81,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh release view wordbank-latest >/dev/null 2>&1 \
-            || gh release create wordbank-latest --title "Word bank (rolling)" \
-                 --notes "Public data bank for tukuk.org /alat/dictionary. This tag is overwritten \
-by wordbank-build.yml; production pulls these assets by SHA256. Do not delete it."
+          # One line, no backslash continuation: a `\` at the end of a line inside a `run: |` block
+          # looks harmless, but the next line has to stay indented at the block level. The first
+          # version of this step dedented its wrapped --notes string to column 1, which CLOSED the
+          # block scalar, and GitHub rejected the whole file — the run had zero jobs, the workflow
+          # registered with no triggers at all, and the failure showed up only as a red X with no
+          # log to read. `workflow_dispatch` then answered "Workflow does not have
+          # 'workflow_dispatch' trigger", which is the sound a schema-invalid workflow makes.
+          gh release view wordbank-latest >/dev/null 2>&1 || gh release create wordbank-latest --title "Word bank (rolling)" --notes "Public data bank for tukuk.org /alat/dictionary. This tag is overwritten by wordbank-build.yml; production pulls these assets by SHA256. Do not delete it."
           # --clobber: the whole point is that the tag stays current instead of accumulating
           # hundreds of releases nobody can prune.
           gh release upload wordbank-latest dist/* --clobber
