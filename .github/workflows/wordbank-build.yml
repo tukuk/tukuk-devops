@@ -1,0 +1,91 @@
+name: wordbank-build
+
+# Builds tukuk.org's own dictionary data (see tools/wordbank_build.py) and publishes it on a
+# rolling public release so the production box can pull it over plain HTTPS.
+#
+# Why the work happens HERE and not on the server: this repo is public, so standard Linux runner
+# minutes are free and effectively unlimited, while the private app repo is capped at 2 000
+# minutes/month. Generation is the expensive half; the box only has to download and load.
+#
+# Why a Release and not R2 or an Actions artifact:
+#   • artifacts expire (90 days) and are invisible from the box without a token;
+#   • putting the Cloudflare R2 token in a PUBLIC repo hands write access to the bucket that holds
+#     the production backups to anyone who can read the repo's secrets configuration;
+#   • a release asset is a permanent public URL, served from a CDN, needing no credential at all
+#     on either side. R2 egress is free, but so is this, and it costs no quota.
+#
+# The tag wordbank-latest is reused forever, so the download URL never changes. (There is no
+# `name_note:` key in a workflow — an unrecognised top-level key fails the whole schema check, so
+# this sentence has to live in a comment.)
+
+on:
+  schedule:
+    # Mondays 04:17 UTC. Deliberately off the round hour: the box's own daily auto-update runs
+    # ~04:30 local and the backup timers sit at :00/:15, and a build that collides with a backup
+    # looks like a backup failure.
+    - cron: '17 4 * * 1'
+  workflow_dispatch: {}
+  push:
+    paths:
+      - 'tools/wordbank_build.py'
+      - '.github/workflows/wordbank-build.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wordbank-latest
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: install
+        run: pip install --quiet nltk wordfreq
+
+      # No `|| true`, no continue-on-error: the exit code is the only honest signal, and a build
+      # that ships an empty bank under a green check is worse than a red X. The script itself
+      # returns non-zero when English produced no rows.
+      - name: build
+        run: python tools/wordbank_build.py --out dist
+
+      - name: summary
+        run: |
+          # jq, not a python one-liner in a YAML block: the first version embedded a multi-line
+          # `python -c "…"` with backslash continuations, which is exactly the construct that has to
+          # survive both YAML and shell quoting, and it does not.
+          {
+            echo "## Word bank build"
+            echo
+            jq -r '"**" + (.rows_total|tostring) + " rows total**", "",
+                   (.files[] | "- \(.lang): \(.rows) rows, \(.words) words, "
+                              + "\((.bytes/1e6*10|round)/10) MB gz, \((.bytes/.rows)|floor) B/row")'
+              dist/manifest.json
+            echo
+            echo "sha256 (production verifies these before loading):"
+            echo '```'
+            cat dist/SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: publish on the rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view wordbank-latest >/dev/null 2>&1 \
+            || gh release create wordbank-latest --title "Word bank (rolling)" \
+                 --notes "Public data bank for tukuk.org /alat/dictionary. This tag is overwritten \
+by wordbank-build.yml; production pulls these assets by SHA256. Do not delete it."
+          # --clobber: the whole point is that the tag stays current instead of accumulating
+          # hundreds of releases nobody can prune.
+          gh release upload wordbank-latest dist/* --clobber
+          echo "published: $(gh release view wordbank-latest --json assets -q '.assets[].name' | tr '\n' ' ')"
