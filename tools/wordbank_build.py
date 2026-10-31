@@ -80,22 +80,25 @@ def emit(handle, seen, doc):
 
 
 def build_lang(wn, lang, outdir):
+    # WordNet speaks ISO-639-3, not the short codes; translate before asking for synsets.
+    langid = WORDNET_LANGID.get(lang, lang)
+    try:
+        synsets = list(wn.all_synsets(lang=langid))
+    except Exception as exc:
+        print("  %-2s (langId %s) unavailable: %s" % (lang, langid, exc))
+        return None
+    if not synsets:
+        # Zero is the exact failure mode that broke the first build. Say it out loud on stdout
+        # so the Actions log shows WHY a language dropped out instead of a clean, silent absence.
+        print("  %-2s (langId %s): WordNet has no synsets for this langId — OMW not loaded?"
+              % (lang, langid))
+        return None
+    # Only open the output file now that we KNOW there is data. Opening it first and returning early
+    # left a 43-byte empty gzip on disk for every unavailable language, and `dist/*` uploaded all of
+    # them to the release — invisible to SHA256SUMS, but real clutter a consumer would trip over.
     rows, seen, per_word = 0, set(), {}
     path = os.path.join(outdir, "wordbank-%s.jsonl.gz" % lang)
     with gzip.open(path, "wt", encoding="utf-8") as fh:
-        # WordNet speaks ISO-639-3, not the short codes; translate before asking for synsets.
-        langid = WORDNET_LANGID.get(lang, lang)
-        try:
-            synsets = list(wn.all_synsets(lang=langid))
-        except Exception as exc:
-            print("  %-2s (langId %s) unavailable: %s" % (lang, langid, exc))
-            return None
-        if not synsets:
-            # Zero is the exact failure mode that broke the first build. Say it out loud on stdout
-            # so the Actions log shows WHY a language dropped out instead of a clean, silent absence.
-            print("  %-2s (langId %s): WordNet has no synsets for this langId — OMW not loaded?"
-                  % (lang, langid))
-            return None
         for syn in synsets:
             definition = norm(syn.definition())
             if not definition:
