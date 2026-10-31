@@ -91,4 +91,14 @@ jobs:
           # --clobber: the whole point is that the tag stays current instead of accumulating
           # hundreds of releases nobody can prune.
           gh release upload wordbank-latest dist/* --clobber
+          # --clobber overwrites assets that share a NAME with a new file, but it never deletes an
+          # asset this build stopped producing — so the 43-byte empty-language files from an earlier
+          # run lingered forever. Prune any release asset that is not in dist/, so the rolling tag
+          # always reflects exactly one build.
+          for name in $(gh release view wordbank-latest --json assets -q '.assets[].name'); do
+            if [ ! -e "dist/$name" ]; then
+              echo "pruning stale release asset: $name"
+              gh release delete-asset wordbank-latest "$name" --yes
+            fi
+          done
           echo "published: $(gh release view wordbank-latest --json assets -q '.assets[].name' | tr '\n' ' ')"
