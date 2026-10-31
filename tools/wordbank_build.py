@@ -193,7 +193,7 @@ def main():
         info = build_lang(wn, lang, args.out)
         if info:
             avg = int(info["bytes"] / max(info["rows"], 1))
-            print("  %-2s %8d rows  %7.1f MB gz  ~%d B/row" % (
+            print("  %-2s %8d rows  %7.1f MB gz  ~%d B/row (gz; uncompressed ~3-5x)" % (
                 lang, info["rows"], info["bytes"] / 1e6, avg))
             files.append(info)
             totals += info["rows"]
@@ -202,17 +202,27 @@ def main():
         print("FATAL: English produced no rows — the bank would ship empty.", file=sys.stderr)
         return 1
 
-    import wordfreq
+    # wordfreq has no __version__ attribute; the distribution metadata does. Reading the wrong one
+    # crashed the whole run *after* 206 909 English rows had already been written — the data was
+    # fine, the manifest was not. importlib.metadata is the standard way, with an honest fallback.
+    try:
+        from importlib.metadata import version as _pkg_version
+        wf_version = _pkg_version("wordfreq")
+    except Exception:
+        wf_version = "unknown"
     manifest = {
         "built_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "rows_total": totals,
         "files": files,
         "sources": {
             "wordnet": "Princeton WordNet 3.1 via NLTK (https://wordnet.princeton.edu)",
-            "omw": "Open Multilingual Wordnet 1.4",
+            "omw": "Open Multilingual Wordnet 1.4 — present but see note",
             "wordfreq": "wordfreq %s (CC-BY-SA 4.0, https://github.com/rspeer/wordfreq)"
-            % wordfreq.__version__,
+            % wf_version,
         },
+        "note": "NLTK's WordNet registers only langId 'eng' here even with omw-1.4 downloaded, so "
+        "this bank is English. Malay/Indonesian dictionary coverage comes from a Wiktionary "
+        "(wiktextract) pipeline, which is the correct source for those languages anyway — not WordNet.",
         "licence": "WordNet is redistributed under its notice (free use with attribution); wordfreq "
         "is CC-BY-SA 4.0. Keep this manifest next to the data.",
         "seconds": round(time.time() - started, 1),
