@@ -17,6 +17,13 @@ The application source itself is **not** here. It lives in the private `tukuk/tu
 
 ### The word bank
 
+**Status: shipping, English.** The first production run published **206 909 rows** (`wordbank-en.jsonl.gz`,
+~6.8 MB gz) and `tukuk-os` loads them live. Multilingual Wordnet (OMW) is *attempted* but NLTK's WordNet
+registers only the langId `eng` in this environment — even with `omw-1.4` downloaded — so the other
+languages produce no rows and are dropped (the build prints exactly this, on stdout, every run). Malay
+and Indonesian dictionary coverage therefore comes from a **Wiktionary (wiktextract)** pipeline, which is
+the correct source for those languages anyway — that is the next workflow here, not WordNet.
+
 `tools/wordbank_build.py` emits one **lean** JSONL row per `(language, word, sense)`:
 
 ```json
