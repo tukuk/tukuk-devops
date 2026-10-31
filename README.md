@@ -14,16 +14,24 @@ The application source itself is **not** here. It lives in the private `tukuk/tu
 | Pipeline | Trigger | Output |
 |---|---|---|
 | [`wordbank-build`](.github/workflows/wordbank-build.yml) | Mondays 04:17 UTC, on push to `tools/`, or by hand | A dictionary data bank built from Princeton WordNet + wordfreq, published on the rolling release tag [`wordbank-latest`](https://github.com/tukuk/tukuk-devops/releases/tag/wordbank-latest) |
-| [`wordbank-monitor`](.github/workflows/wordbank-monitor.yml) | Daily 05:20 UTC, or by hand | Reads the `wordbank-latest` release the way the server does and fails red if it is empty, stale, or checksum-mismatched. Read-only, no credentials, no server access — the red run *is* the alert |
+| [`malaybank-build`](.github/workflows/malaybank-build.yml) | Mondays 04:47 UTC, on push to its tool/workflow, or by hand | Malay + Indonesian word bank from the **raw wiktextract** exports, published on the rolling release tag [`malaybank-latest`](https://github.com/tukuk/tukuk-devops/releases/tag/malaybank-latest) |
+| [`wordbank-monitor`](.github/workflows/wordbank-monitor.yml) | Daily 05:20 UTC, or by hand | Reads **both** rolling releases the way the server does and fails red if either is empty, stale, or checksum-mismatched. Read-only, no credentials, no server access — the red run *is* the alert |
 
 ### The word bank
 
-**Status: shipping, English.** The first production run published **206 909 rows** (`wordbank-en.jsonl.gz`,
-~6.8 MB gz) and `tukuk-os` loads them live. Multilingual Wordnet (OMW) is *attempted* but NLTK's WordNet
-registers only the langId `eng` in this environment — even with `omw-1.4` downloaded — so the other
-languages produce no rows and are dropped (the build prints exactly this, on stdout, every run). Malay
-and Indonesian dictionary coverage therefore comes from a **Wiktionary (wiktextract)** pipeline, which is
-the correct source for those languages anyway — that is the next workflow here, not WordNet.
+**Status: shipping — English, Malay, Indonesian.** The English run published **206 909 rows**
+(`wordbank-en.jsonl.gz`, ~6.8 MB gz) from WordNet; the Malay pipeline published **93 788 rows**
+(ms 14 307 + id 79 481) from raw wiktextract. `tukuk-os` merges both into one `kata` index (300 660
+documents live).
+
+Multilingual WordNet (OMW) was *attempted first* and abandoned honestly: NLTK's WordNet registers
+only the langId `eng` in this environment — even with `omw-1.4` downloaded — so the other languages
+produce no rows and are dropped (the build prints exactly this, on stdout, every run). Malay and
+Indonesian coverage therefore comes from `tools/wikt_ms_build.py`, which reads the actively updated
+raw per-language exports `kaikki.org/dictionary/downloads/<lang>/<lang>-extract.jsonl.gz` (the
+*deprecated* warning applies only to the post-processed JSONL) and keeps only entries whose
+`lang_code` is the wiki's own language — Malay words glossed in Malay, Indonesian glossed in
+Indonesian. Wiktionary text is CC BY-SA 4.0; the manifest carries the attribution beside the data.
 
 `tools/wordbank_build.py` emits one **lean** JSONL row per `(language, word, sense)`:
 
@@ -64,7 +72,8 @@ That is the intended use of this repo: it is where new automation goes, because 
 run here. A good candidate is self-contained (input pinned, output one file or a directory), has a
 `timeout-minutes`, and prints a step summary a human can read without opening logs.
 
-Ideas queued, in no particular order: multilingual Wiktionary extraction, place/geodata snapshots,
-weather and earthquake archives, sitemap + RSS generation, link integrity across the site, Lighthouse
-budgets, dependency audits, multi-region uptime probes, and benchmark runs that would burn a private
-repo's whole monthly allowance in an afternoon.
+Ideas queued, in no particular order: more Wiktionary languages (add one entry to `EDITIONS` in
+`wikt_ms_build.py`), place/geodata snapshots, weather and earthquake archives, sitemap + RSS
+generation, link integrity across the site, Lighthouse budgets, dependency audits, multi-region
+uptime probes, and benchmark runs that would burn a private repo's whole monthly allowance in an
+afternoon.
