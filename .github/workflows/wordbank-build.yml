@@ -59,16 +59,15 @@ jobs:
 
       - name: summary
         run: |
-          # jq, not a python one-liner in a YAML block: the first version embedded a multi-line
-          # `python -c "…"` with backslash continuations, which is exactly the construct that has to
-          # survive both YAML and shell quoting, and it does not.
+          # Every jq call is a SINGLE line with its file argument on that same line. The previous
+          # version wrapped the filter across lines and put `dist/manifest.json` on the NEXT line:
+          # the closing `'` was followed by a newline, which ENDS the shell command, so bash then
+          # tried to execute `dist/manifest.json` as a program -> "Permission denied", exit 126.
           {
             echo "## Word bank build"
             echo
-            jq -r '"**" + (.rows_total|tostring) + " rows total**", "",
-                   (.files[] | "- \(.lang): \(.rows) rows, \(.words) words, "
-                              + "\((.bytes/1e6*10|round)/10) MB gz, \((.bytes/.rows)|floor) B/row")'
-              dist/manifest.json
+            jq -r '"**\(.rows_total) rows total**"' dist/manifest.json
+            jq -r '.files[] | "- \(.lang): \(.rows) rows, \(.words) words, \((.bytes/1e6*10|round)/10) MB gz (\((.bytes/.rows)|floor) B/row gz)"' dist/manifest.json
             echo
             echo "sha256 (production verifies these before loading):"
             echo '```'
