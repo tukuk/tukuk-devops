@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Verify the word-bank release the production box pulls from — integrity and freshness.
+"""Verify the word-bank releases the production box pulls from — integrity and freshness.
 
 Why this exists as a *public* Action: it costs nothing to run here, needs no credentials, and is the
 only thing that would tell us the bank went stale or corrupt before a visitor on /alat/dictionary
-notices a regression. It reads the public release exactly the way scripts/wordbank-sync.sh does.
+notices a regression. It reads the public releases exactly the way scripts/wordbank-sync.sh does —
+which since the Malay pipeline means BOTH rolling tags: wordbank-latest (English, WordNet) and
+malaybank-latest (Malay + Indonesian, wiktextract).
 
-Checks, all against the real download path the server uses:
-  1. manifest.json parses, rows_total > 0 and English is present.
+Checks, all against the real download paths the server uses, per release:
+  1. manifest.json parses, rows_total > 0 and the languages that release owns are present.
   2. built_at is younger than --max-age-days (catches a cron that quietly stopped).
   3. SHA256SUMS covers every file the manifest lists.
   4. Each data file downloads and its sha256 matches SHA256SUMS (a truncated CDN object is not a
@@ -22,7 +24,14 @@ import json
 import sys
 import urllib.request
 
-BASE_DEFAULT = "https://github.com/tukuk/tukuk-devops/releases/download/wordbank-latest"
+ORIGIN = "https://github.com/tukuk/tukuk-devops/releases/download"
+
+# tag -> languages that release must always contain. A release that stops producing a language it
+# owns is a silent data loss: the box would just load fewer files and nobody would notice.
+RELEASES = {
+    "wordbank-latest": ["en"],
+    "malaybank-latest": ["ms", "id"],
+}
 
 
 def fetch(url):
@@ -40,35 +49,33 @@ def err(msg, errors):
     errors.append(msg)
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--base", default=BASE_DEFAULT)
-    ap.add_argument("--max-age-days", type=int, default=14)
-    args = ap.parse_args()
-
-    errors = []
-    manifest = json.loads(fetch("%s/manifest.json" % args.base))
+def verify_release(tag, required_langs, max_age_days, errors):
+    """Run every check for one rolling release, appending findings to `errors`."""
+    base = "%s/%s" % (ORIGIN, tag)
+    print("== %s" % tag)
+    manifest = json.loads(fetch("%s/manifest.json" % base))
     rows = manifest.get("rows_total", 0)
     files = manifest.get("files", [])
     langs = {f.get("lang") for f in files}
     if rows <= 0:
-        err("rows_total is %s (bank is empty)" % rows, errors)
-    if "en" not in langs:
-        err("English is missing from the bank: %s" % sorted(langs), errors)
+        err("%s: rows_total is %s (bank is empty)" % (tag, rows), errors)
+    missing = [l for l in required_langs if l not in langs]
+    if missing:
+        err("%s: missing expected language(s) %s — present: %s" % (tag, missing, sorted(langs)), errors)
 
     built = manifest.get("built_at")
     try:
         bdt = dt.datetime.strptime(built, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc)
         age = (dt.datetime.now(dt.timezone.utc) - bdt).days
-        if age > args.max_age_days:
-            err("bank is %d days old (> %d) — did the build cron stop?" % (age, args.max_age_days), errors)
+        if age > max_age_days:
+            err("%s: bank is %d days old (> %d) — did the build cron stop?" % (tag, age, max_age_days), errors)
         else:
             print("bank age: %d day(s), rows_total: %d, langs: %s" % (age, rows, sorted(langs)))
     except Exception as exc:
-        err("could not parse built_at %r: %s" % (built, exc), errors)
+        err("%s: could not parse built_at %r: %s" % (tag, built, exc), errors)
 
     sums = {}
-    for line in fetch("%s/SHA256SUMS" % args.base).decode().splitlines():
+    for line in fetch("%s/SHA256SUMS" % base).decode().splitlines():
         parts = line.split()
         if len(parts) == 2:
             sums[parts[1]] = parts[0]
@@ -77,13 +84,27 @@ def main():
         if not name:
             continue
         if name not in sums:
-            err("SHA256SUMS is missing an entry for %s" % name, errors)
+            err("%s: SHA256SUMS is missing an entry for %s" % (tag, name), errors)
             continue
-        digest = sha256_bytes(fetch("%s/%s" % (args.base, name)))
+        digest = sha256_bytes(fetch("%s/%s" % (base, name)))
         if digest != sums[name]:
-            err("checksum mismatch for %s: got %s want %s" % (name, digest[:16], sums[name][:16]), errors)
+            err("%s: checksum mismatch for %s: got %s want %s" % (tag, name, digest[:16], sums[name][:16]), errors)
         else:
             print("OK %s (%d rows, sha %s…)" % (name, f.get("rows", 0), digest[:16]))
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--max-age-days", type=int, default=14)
+    ap.add_argument("--tag", action="append", choices=sorted(RELEASES),
+                    help="verify only this release (default: all)")
+    args = ap.parse_args()
+
+    errors = []
+    for tag, required in RELEASES.items():
+        if args.tag and tag not in args.tag:
+            continue
+        verify_release(tag, required, args.max_age_days, errors)
 
     if errors:
         print("word-bank monitor: %d problem(s)" % len(errors))

@@ -1,0 +1,92 @@
+name: malaybank-build
+
+# Builds the Malay + Indonesian half of tukuk.org's word bank (see tools/wikt_ms_build.py) from the
+# raw wiktextract exports and publishes it on its own rolling public release, next to the English
+# one (wordbank-latest). The production box merges BOTH into the single `kata` Meilisearch index.
+#
+# Why a separate release tag instead of appending to wordbank-latest: the English bank is already
+# live and verified on the box; a second generator writing into the same tag would mean every
+# stale-asset prune step has to know about both builds, and a Malay build failure would leave the
+# shared manifest listing files that no longer match what was last published. One tag per generator
+# keeps each publish/prune self-consistent, and wordbank-sync.sh just loops over two tags.
+#
+# Same runner economics as wordbank-build.yml: public repo -> unlimited free Linux minutes, and the
+# box only ever downloads CDN-cached release assets over plain HTTPS with no credentials.
+#
+# Source note: kaikki.org's *post-processed* JSONL downloads are deprecated; the raw per-language
+# <lang>-extract.jsonl.gz files linked in the tool's docstring are the actively updated ones.
+
+on:
+  schedule:
+    # Mondays 04:47 UTC — after the 04:17 English build, before the box's ~05:00 sync window, and
+    # never mid-publish of the other bank (the monitor dodges both too).
+    - cron: '47 4 * * 1'
+  workflow_dispatch: {}
+  push:
+    paths:
+      - 'tools/wikt_ms_build.py'
+      - '.github/workflows/malaybank-build.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: malaybank-latest
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # wordfreq only — no nltk here: this generator reads wiktextract JSONL directly, and every
+      # extra pip package on the critical path is another way for a Thursday pypi hiccup to turn
+      # Monday's build red.
+      - name: install
+        run: pip install --quiet wordfreq
+
+      # The script returns non-zero when neither language produced rows (a moved upstream URL must
+      # not ship as an empty green build).
+      - name: build
+        run: python tools/wikt_ms_build.py --out dist
+
+      - name: summary
+        run: |
+          # Single-line jq calls with the file argument on the SAME line (see wordbank-build.yml: a
+          # wrapped filter made bash exec the filename and die with exit 126).
+          {
+            echo "## Malay/Indonesian bank build"
+            echo
+            jq -r '"**\(.rows_total) rows total**"' dist/manifest.json
+            jq -r '.files[] | "- \(.lang): \(.rows) rows, \(.words) words, \((.bytes/1e6*10|round)/10) MB gz (\((.bytes/.rows)|floor) B/row gz)"' dist/manifest.json
+            echo
+            echo "sha256 (production verifies these before loading):"
+            echo '```'
+            cat dist/SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: publish on the rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # No backslash continuations inside this block scalar (see wordbank-build.yml for the
+          # schema-invalid failure a dedented wrapped --notes caused).
+          gh release view malaybank-latest >/dev/null 2>&1 || gh release create malaybank-latest --title "Malay/Indonesian word bank (rolling)" --notes "Public Malay + Indonesian data bank for tukuk.org /alat/dictionary, from raw wiktextract exports (CC BY-SA 4.0). This tag is overwritten by malaybank-build.yml; production pulls these assets by SHA256. Do not delete it."
+          gh release upload malaybank-latest dist/* --clobber
+          # --clobber never deletes an asset this build stopped producing — prune so the rolling tag
+          # always reflects exactly one build, same as the English publish step.
+          for name in $(gh release view malaybank-latest --json assets -q '.assets[].name'); do
+            if [ ! -e "dist/$name" ]; then
+              echo "pruning stale release asset: $name"
+              gh release delete-asset malaybank-latest "$name" --yes
+            fi
+          done
+          echo "published: $(gh release view malaybank-latest --json assets -q '.assets[].name' | tr '\n' ' ')"
