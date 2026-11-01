@@ -68,7 +68,7 @@ jobs:
           {
             echo "## APOD bank build"
             jq -r '"**\(.rows_total) dated entries, newest \(.newest_date), \(.pending_remaining) day(s) behind today**"' dist/manifest.json
-            jq -r '.this_run | "- this run: +\(.fetched_ok) banked, \(.gone) gap days, \(.failed) failed in \(.elapsed_s)s" + (if .stopped_early then " (stopped early — resumes next run)" else "" end)"' dist/manifest.json
+            jq -r '.this_run | "- this run: +\(.fetched_ok) banked, \(.gone) gap days, \(.failed) failed in \(.elapsed_s)s" + (if .stopped_early then " (stopped early — resumes next run)" else "" end)' dist/manifest.json
             echo
             echo '```'
             cat dist/SHA256SUMS
