@@ -4,9 +4,10 @@
 Why this exists as a *public* Action: it costs nothing to run here, needs no credentials, and is the
 only thing that would tell us the bank went stale or corrupt before a visitor on /alat/dictionary
 notices a regression. It reads the public releases exactly the way scripts/wordbank-sync.sh does —
-which since the Malay pipeline means THREE rolling tags: wordbank-latest (English, WordNet),
-malaybank-latest (Malay + Indonesian, wiktextract) and wikibank-latest (Wikipedia summary
-snapshots, which GROWS a few tens of thousands of titles per daily run instead of rebuilding).
+which since the Malay pipeline means FIVE rolling tags: wordbank-latest (English, WordNet),
+malaybank-latest (Malay + Indonesian, wiktextract), wikibank-latest (Wikipedia summary
+snapshots, which GROWS a few tens of thousands of titles per daily run instead of rebuilding),
+apodbank-latest (APOD page-archive entries) and quakebank-latest (rolling 35-day USGS window).
 
 Checks, all against the real download paths the server uses, per release:
   1. manifest.json parses, rows_total > 0 and the languages that release owns are present.
@@ -34,6 +35,8 @@ RELEASES = {
     "wordbank-latest": ["en"],
     "malaybank-latest": ["ms", "id"],
     "wikibank-latest": [],
+    "apodbank-latest": [],
+    "quakebank-latest": [],
 }
 
 

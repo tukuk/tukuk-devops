@@ -15,7 +15,10 @@ The application source itself is **not** here. It lives in the private `tukuk/tu
 |---|---|---|
 | [`wordbank-build`](.github/workflows/wordbank-build.yml) | Mondays 04:17 UTC, on push to `tools/`, or by hand | A dictionary data bank built from Princeton WordNet + wordfreq, published on the rolling release tag [`wordbank-latest`](https://github.com/tukuk/tukuk-devops/releases/tag/wordbank-latest) |
 | [`malaybank-build`](.github/workflows/malaybank-build.yml) | Mondays 04:47 UTC, on push to its tool/workflow, or by hand | Malay + Indonesian word bank from the **raw wiktextract** exports, published on the rolling release tag [`malaybank-latest`](https://github.com/tukuk/tukuk-devops/releases/tag/malaybank-latest) |
-| [`wordbank-monitor`](.github/workflows/wordbank-monitor.yml) | Daily 05:20 UTC, or by hand | Reads **both** rolling releases the way the server does and fails red if either is empty, stale, or checksum-mismatched. Read-only, no credentials, no server access — the red run *is* the alert |
+| [`wikibank-build`](.github/workflows/wikibank-build.yml) | Daily 06:07 UTC (3 h fetch budget per run), on push, or by hand | Resumable Wikipedia summary bank (640 865-title seed, ~30–40 k titles per run) on the growing release tag [`wikibank-latest`](https://github.com/tukuk/tukuk-devops/releases/tag/wikibank-latest) |
+| [`apodbank-build`](.github/workflows/apodbank-build.yml) | Daily 06:37 UTC (2 h 47 m budget), on push, or by hand | The **official science.nasa.gov APOD page archive**, one page per date, forward-only and resumable, on [`apodbank-latest`](https://github.com/tukuk/tukuk-devops/releases/tag/apodbank-latest). Built 2026-11-01 because api.nasa.gov answers 500/broken payloads while these pages are healthy; no API key, no secret anywhere |
+| [`quakebank-build`](.github/workflows/quakebank-build.yml) | Daily 07:17 UTC, on push, or by hand | Rolling **35-day USGS window** (world M2.5+ + Malaysia box M2.0+), rebuilt whole every run because USGS revises events, on [`quakebank-latest`](https://github.com/tukuk/tukuk-devops/releases/tag/quakebank-latest) |
+| [`wordbank-monitor`](.github/workflows/wordbank-monitor.yml) | Daily 05:20 UTC, or by hand | Reads **every** rolling release the way the server does and fails red if any is empty, stale, or checksum-mismatched. Read-only, no credentials, no server access — the red run *is* the alert |
 
 ### The word bank
 
@@ -73,7 +76,8 @@ run here. A good candidate is self-contained (input pinned, output one file or a
 `timeout-minutes`, and prints a step summary a human can read without opening logs.
 
 Ideas queued, in no particular order: more Wiktionary languages (add one entry to `EDITIONS` in
-`wikt_ms_build.py`), place/geodata snapshots, weather and earthquake archives, sitemap + RSS
-generation, link integrity across the site, Lighthouse budgets, dependency audits, multi-region
-uptime probes, and benchmark runs that would burn a private repo's whole monthly allowance in an
-afternoon.
+`wikt_ms_build.py`), place/geodata snapshots, weather archives, sitemap + RSS generation,
+Lighthouse budgets, multi-region uptime probes, and benchmark runs that would burn a private repo's
+whole monthly allowance in an afternoon. Done since this list was written: earthquake archive
+(`quakebank-build`), APOD archive (`apodbank-build`), link integrity and dependency audits (they
+live in the private `tukuk-os` repo — they need its source/lockfile, not this repo's minutes).

@@ -1,0 +1,74 @@
+name: quakebank-build
+
+# Rebuilds tukuk.org's own earthquake bank (tools/quake_build.py) from the USGS FDSN event
+# query — a rolling 35-day window, worldwide M2.5+ plus the Malaysia box at M2.0+.
+#
+# Unlike the archive banks this one is NOT resumable and must not be: USGS revises recent
+# events (magnitude, status) hours after they appear, so yesterday's row for the same id can
+# be wrong. Every run therefore pulls the whole window fresh and republishes the whole file —
+# two requests a day to USGS, a few thousand rows, seconds of work. The box downloads the
+# finished checksummed asset; earthquake.usgs.gov stays in src/gempa.js exactly as it is,
+# as the fallback it already has.
+
+on:
+  schedule:
+    # Daily 07:17 UTC. Well clear of wordbank (Mon 04:17/04:47), wikibank (06:07),
+    # apodbank (06:37), the monitor (05:20) and the box's :00/:15 timers; USGS's own
+    # refresh cycle (~5 min) makes the exact minute irrelevant.
+    - cron: '17 7 * * *'
+  workflow_dispatch: {}
+  push:
+    paths:
+      - 'tools/quake_build.py'
+      - '.github/workflows/quakebank-build.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: quakebank-latest
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # stdlib only — same rule as every other bank: no pip package between us and the data.
+
+      - name: build (whole rolling window)
+        run: python tools/quake_build.py --out dist
+
+      - name: summary
+        run: |
+          # Single-line jq with the file arg on the SAME line (the exit-126 lesson).
+          {
+            echo "## Earthquake bank build"
+            jq -r '"**\(.rows_total) events banked, window \(.window.start) .. \(.window.end)**"' dist/manifest.json
+            jq -r '.this_run | "- world_m25: \(.world_m25) rows, malaysia_m20: \(.malaysia_m20) rows"' dist/manifest.json
+            echo
+            echo '```'
+            cat dist/SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: publish on the rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view quakebank-latest >/dev/null 2>&1 || gh release create quakebank-latest --title "Earthquake bank (rolling 35-day window, USGS)" --notes "USGS FDSN event snapshots that tukuk.org /earthquakes serves before asking USGS live. Rebuilt whole by quakebank-build.yml; U.S. Government work, public domain. Production pulls these assets by SHA256. Do not delete."
+          gh release upload quakebank-latest dist/* --clobber
+          for name in $(gh release view quakebank-latest --json assets -q '.assets[].name'); do
+            if [ ! -e "dist/$name" ]; then
+              echo "pruning stale release asset: $name"
+              gh release delete-asset quakebank-latest "$name" --yes
+            fi
+          done
+          echo "published: $(gh release view quakebank-latest --json assets -q '.assets[].name' | tr '\n' ' ')"

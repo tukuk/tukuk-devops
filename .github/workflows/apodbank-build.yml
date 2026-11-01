@@ -1,0 +1,91 @@
+name: apodbank-build
+
+# Fills tukuk.org's own APOD bank (tools/apod_build.py) from the OFFICIAL science.nasa.gov page
+# archive — one page per calendar date, forward-only, resumable.
+#
+# Why this pipeline exists at all (2026-11-01): api.nasa.gov's IPv4 backends answer 500 to this
+# network, and even its healthy backends now serve HTTP 200 "broken payloads" (title "NASA
+# Science" + logo placeholder) for recent dates. The page archive is the one source that is
+# healthy for everyone — the app's own Fallback A parses exactly these pages. So the expensive
+# half moves to GitHub's free public runners and the box just downloads a checksummed release
+# asset, same split as wordbank/malaybank/wikibank. The live chain (API → page → disk → archive
+# DB) stays in the app untouched as the fallback.
+#
+# No API key and no secret anywhere: these are public web pages, and keeping this pipeline
+# credential-free is what lets it live in the public repo forever.
+
+on:
+  schedule:
+    # Daily 06:37 UTC. Dodges wordbank-build (Mon 04:17), malaybank-build (Mon 04:47),
+    # wikibank-build (06:07), wordbank-monitor (05:20) and the box's own :00/:15 timers.
+    # APOD pages are published around 04:00 UTC, so yesterday's AND today's page both exist here.
+    - cron: '37 6 * * *'
+  workflow_dispatch: {}
+  push:
+    paths:
+      - 'tools/apod_build.py'
+      - '.github/workflows/apodbank-build.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apodbank-latest
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # First run backfills ~11 400 pages at ~1 fetch/s ≈ 3.2 h and soft-stops on the budget;
+    # steady state is ONE page per day and finishes in seconds. 240 min = budget (170 min) +
+    # resume download + republish + slack, well under GitHub's 6 h cap.
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # stdlib only (urllib + gzip): every pip package here is another outage between us and the
+      # bank growing.
+
+      - name: resume previous bank
+        run: |
+          set -uo pipefail
+          # First run in history has no release yet — that is not an error, so `|| true` belongs
+          # on THIS download only (a swallowed build failure would hide broken data).
+          curl -fsSL --retry 3 -o apod-prev.jsonl.gz \
+            "https://github.com/tukuk/tukuk-devops/releases/download/apodbank-latest/apod.jsonl.gz" \
+            || echo "no previous bank (first build) — backfilling from 1995-06-16"
+
+      - name: build (budgeted slice)
+        run: python tools/apod_build.py --prev apod-prev.jsonl.gz --out dist --pace-s 1.0 --budget-s 10200
+
+      - name: summary
+        run: |
+          # Single-line jq with the file arg on the SAME line (the exit-126 lesson).
+          {
+            echo "## APOD bank build"
+            jq -r '"**\(.rows_total) dated entries, newest \(.newest_date), \(.pending_remaining) day(s) behind today**"' dist/manifest.json
+            jq -r '.this_run | "- this run: +\(.fetched_ok) banked, \(.gone) gap days, \(.failed) failed in \(.elapsed_s)s" + (if .stopped_early then " (stopped early — resumes next run)" else "" end)"' dist/manifest.json
+            echo
+            echo '```'
+            cat dist/SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: publish on the rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view apodbank-latest >/dev/null 2>&1 || gh release create apodbank-latest --title "APOD bank (rolling, official science.nasa.gov page archive)" --notes "Astronomy Picture of the Day entries that tukuk.org serves before ever asking api.nasa.gov. Built by apodbank-build.yml from the official page archive; NASA media is generally public domain and photographer credits are kept per row. Production pulls these assets by SHA256. Do not delete."
+          gh release upload apodbank-latest dist/* --clobber
+          for name in $(gh release view apodbank-latest --json assets -q '.assets[].name'); do
+            if [ ! -e "dist/$name" ]; then
+              echo "pruning stale release asset: $name"
+              gh release delete-asset apodbank-latest "$name" --yes
+            fi
+          done
+          echo "published: $(gh release view apodbank-latest --json assets -q '.assets[].name' | tr '\n' ' ')"
